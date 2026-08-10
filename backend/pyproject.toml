@@ -1,0 +1,12 @@
+[tool.ruff]
+line-length = 115
+target-version = "py312"
+exclude = ["app/engine/pytest_project/_runs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008: FastAPI's Depends(...)/Query(...) as default arg is the documented idiom, not a bug.
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

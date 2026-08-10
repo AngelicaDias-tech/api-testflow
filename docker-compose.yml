@@ -1,0 +1,21 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - api_testflow_data:/data
+    environment:
+      # Troque para "ollama" se tiver um Ollama acessível (ver docs/AI_PROVIDERS.md).
+      API_TESTFLOW_AI_PROVIDER: heuristic
+      API_TESTFLOW_CORS_ORIGINS: "http://localhost:8080"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  api_testflow_data:
