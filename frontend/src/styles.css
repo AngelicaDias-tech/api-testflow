@@ -1,0 +1,223 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Identidade visual do TestFlow (Angular) — DARK + GRAFITE + ROXO (não
+   azul). Tokens via @theme do Tailwind v4: cada variável abaixo gera as
+   utilities correspondentes (bg-canvas, text-foreground, border-border,
+   bg-primary, text-accent, bg-ai, etc.), reutilizáveis em qualquer tela.
+
+   Correção desta rodada: a versão anterior usava indigo (#6366F1, um tom
+   que tende pro azul) como --color-primary em quase todo elemento de
+   destaque (botões, foco de input, logo do header, ícone do hero, avatar
+   de CADA card de projeto, badge), e um --color-surface azul-marinho
+   (#182235) no header sticky (sempre visível) e no hero do Dashboard —
+   essa combinação é o que deixou o resultado "azul demais". Agora:
+   - a cor de marca é um ROXO de verdade (#7C5CFC), não indigo;
+   - o token --color-surface (azulado) foi removido — header e hero
+     passam a usar --color-card-hover, que é grafite neutro;
+   - o roxo foi retirado de elementos repetidos em lista (avatar de card)
+     e mantido só onde representa AÇÃO/marca (botão primário, logo,
+     ícone do hero, foco de input, estados de hover pontuais) — evita o
+     "sistema inteiro roxo".
+
+   Proporção pretendida: ~85% grafite/neutro (canvas/card/card-hover/
+   border/foreground), ~10% roxo (ações, seleção, links, estados ativos),
+   ~5% accent/estados (cyan só como detalhe técnico pontual — nunca cor
+   de fundo de superfícies grandes — + success/danger/warning + ai).
+   ============================================================ */
+@theme {
+  --color-canvas: #0f1117; /* fundo principal */
+  --color-card: #171a22; /* cards */
+  --color-card-hover: #1d212b; /* cards elevados / header */
+  --color-border: #292e39; /* bordas */
+
+  --color-primary: #7c5cfc; /* roxo principal — identidade do TestFlow */
+  --color-primary-hover: #8b70ff; /* roxo hover */
+  --color-accent: #22d3ee; /* cyan — SÓ detalhe técnico pontual, nunca fundo */
+
+  --color-foreground: #f3f4f6; /* texto principal */
+  --color-foreground-muted: #9ca3af; /* texto secundário */
+  --color-foreground-subtle: #6b7280; /* texto terciário — NUNCA em informação importante */
+
+  --color-success: #34d399; /* PASS */
+  --color-danger: #fb7185; /* FAIL */
+  --color-warning: #fbbf24; /* warning */
+  --color-ai: #a78bfa; /* exclusivo de elementos de IA */
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-canvas text-foreground antialiased;
+}
+
+/* Header — fixo no topo (position: sticky, sem remover o header do fluxo
+   do documento, então nunca cria uma segunda barra de rolagem e o
+   conteúdo nunca precisa de padding manual pra compensar). Comportamento
+   inalterado nesta rodada — só a cor deixou de ser azul-marinho. */
+.app-header {
+  @apply sticky top-0 z-50 border-b border-border bg-card-hover;
+}
+
+.card {
+  @apply rounded-xl border border-border bg-card shadow-sm shadow-black/20;
+}
+
+.btn-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 bg-primary text-white hover:bg-primary-hover;
+}
+
+.btn-secondary {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 border border-border bg-card text-foreground hover:bg-card-hover;
+}
+
+.btn-danger {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 bg-danger text-white hover:bg-danger/90;
+}
+
+.input {
+  @apply w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-foreground-muted focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30;
+}
+
+.label {
+  @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-foreground-muted;
+}
+
+.badge {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
+}
+
+.badge-pass {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-success/15 text-success;
+}
+
+.badge-fail {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-danger/15 text-danger;
+}
+
+.badge-skip {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-card-hover text-foreground-muted;
+}
+
+.badge-auto {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-accent/15 text-accent;
+}
+
+.badge-ai {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-ai/15 text-ai;
+}
+
+.badge-custom {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-primary/15 text-primary;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.link {
+  @apply text-primary hover:text-primary-hover hover:underline;
+}
+
+/* Checkbox — nativo, mas com accent-color roxo (estado selecionado) e
+   borda cinza neutra no estado normal, sempre sobre fundo dark (nunca
+   branco). Regra global: se aplica em toda tela sem precisar tocar cada
+   template. */
+input[type='checkbox'] {
+  @apply h-4 w-4 cursor-pointer rounded border-border bg-card accent-primary;
+}
+
+/* Campo/linha selecionada (ex: construtor manual de regras) — o destaque
+   é roxo e sutil, o fundo continua dark. NUNCA usar fundo quase-branco
+   aqui. */
+.field-selected {
+  background-color: var(--color-card-hover);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px rgba(124, 92, 252, 0.25);
+}
+
+/* Banners de aviso/erro inline (confirmação de ação mutante, falha ao
+   chamar a API) — mesma linguagem visual dark, só a cor semântica muda. */
+.banner-warning {
+  @apply rounded-xl border border-warning/30 bg-warning/10 p-4 text-warning;
+}
+
+.banner-danger {
+  @apply rounded-xl border border-danger/30 bg-danger/10 p-4 text-danger;
+}
+
+/* ============================================================
+   Dashboard (ProjectsPage) — usa os mesmos tokens acima. Nenhum card de
+   estatística, menu ou informação nova foi adicionado: só a pele visual
+   dos elementos que já existiam mudou.
+   ============================================================ */
+
+.dashboard-shell {
+  @apply rounded-2xl border border-border bg-card-hover px-6 py-12 text-center sm:px-12;
+}
+
+.dashboard-hero-icon {
+  @apply mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-2xl shadow-sm shadow-black/30;
+}
+
+.dashboard-title {
+  @apply text-3xl font-bold tracking-tight text-foreground sm:text-4xl;
+}
+
+.dashboard-title-accent {
+  @apply text-primary;
+}
+
+.dashboard-subtitle {
+  @apply mx-auto mt-3 max-w-md text-base leading-relaxed text-foreground-muted;
+}
+
+.dashboard-section-title {
+  @apply text-lg font-semibold tracking-tight text-foreground;
+}
+
+.dashboard-btn-primary {
+  @apply shadow-sm shadow-black/30;
+}
+
+.dashboard-form-card {
+  @apply rounded-2xl border border-border bg-card p-6 shadow-sm shadow-black/20;
+}
+
+.dashboard-empty {
+  @apply rounded-2xl border border-dashed border-border bg-card/60 p-10 text-center text-foreground-muted;
+}
+
+.dashboard-empty-icon {
+  @apply mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-card-hover text-xl;
+}
+
+.dashboard-list {
+  @apply space-y-3;
+}
+
+.dashboard-card {
+  @apply flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm shadow-black/10 transition-colors hover:border-primary/40 hover:bg-card-hover;
+}
+
+/* Avatar do card volta a ser neutro (grafite) — repetido em CADA projeto
+   da lista, então se fosse roxo virava "o sistema inteiro roxo" na
+   prática. Roxo aqui fica só no hover da borda/nome (interação), não
+   como cor estática repetida dezenas de vezes na tela. */
+.dashboard-card-avatar {
+  @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card-hover text-sm font-semibold text-foreground;
+}
+
+.dashboard-card-name {
+  @apply font-semibold text-foreground transition-colors group-hover:text-primary-hover;
+}
+
+.dashboard-card-desc {
+  @apply mt-0.5 text-sm text-foreground-muted;
+}
+
+.dashboard-delete-btn {
+  @apply rounded-lg px-2 py-1 text-xs font-medium text-foreground-muted transition-colors hover:bg-danger/15 hover:text-danger;
+}
