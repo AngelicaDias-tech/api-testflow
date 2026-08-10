@@ -127,3 +127,23 @@ def mask_auth(auth: dict | None) -> dict | None:
         if is_sensitive_auth_field(k) and isinstance(v, str):
             masked[k] = mask_value(v)
     return masked
+
+
+def carry_over_blank_secrets(new_values: dict, old_values: dict | None, is_sensitive) -> dict:
+    """Preserva o valor criptografado ja armazenado quando um campo sensivel
+    chega em branco numa atualizacao (edicao de API - secao 30).
+
+    Por que existe: a interface nunca reenvia o segredo real (token/senha/
+    api_key) em texto puro - campos sensiveis comecam em branco no
+    formulario de edicao e so carregam valor se o usuario digitar um novo.
+    Sem isso, salvar sem alterar o campo sensivel sobrescreveria o segredo
+    real (ja criptografado) com uma string vazia, quebrando a autenticacao
+    configurada (Bearer/API Key/Personalizada/Basic).
+    """
+    if not old_values:
+        return new_values
+    result = dict(new_values)
+    for k, v in new_values.items():
+        if is_sensitive(k) and not v and k in old_values:
+            result[k] = old_values[k]
+    return result

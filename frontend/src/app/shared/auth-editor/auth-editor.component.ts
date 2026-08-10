@@ -15,6 +15,7 @@ import type { AuthDef } from '../../core/models'
           <option value="bearer">Bearer Token</option>
           <option value="basic">Basic Auth</option>
           <option value="api_key">API Key</option>
+          <option value="custom">Personalizada</option>
         </select>
       </div>
 
@@ -75,6 +76,30 @@ import type { AuthDef } from '../../core/models'
               <option value="header">Header</option>
               <option value="query">Query parameter</option>
             </select>
+          </div>
+        </div>
+      }
+
+      @if (auth.type === 'custom') {
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="label">Nome do Header</label>
+            <input
+              class="input mono"
+              placeholder="X-Access-Token"
+              [ngModel]="auth.key_name ?? ''"
+              (ngModelChange)="setField('key_name', $event)"
+            />
+          </div>
+          <div>
+            <label class="label">Valor</label>
+            <input
+              class="input mono"
+              type="password"
+              placeholder="abc123"
+              [ngModel]="auth.api_key ?? ''"
+              (ngModelChange)="setField('api_key', $event)"
+            />
           </div>
         </div>
       }

@@ -5,7 +5,15 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
-from app.core.security import encrypt_auth_for_storage, encrypt_headers_for_storage, mask_auth, mask_headers
+from app.core.security import (
+    carry_over_blank_secrets,
+    encrypt_auth_for_storage,
+    encrypt_headers_for_storage,
+    is_sensitive_auth_field,
+    is_sensitive_header,
+    mask_auth,
+    mask_headers,
+)
 from app.db.database import get_session
 from app.db.models import ApiRequestDef
 from app.engine.discovery import discover_checks
@@ -96,9 +104,11 @@ def update_request(request_id: str, payload: RequestUpdate, session: Session = D
         raise HTTPException(404, "Requisição não encontrada")
     data = payload.model_dump(exclude_unset=True)
     if "headers" in data:
-        data["headers"] = encrypt_headers_for_storage(data["headers"])
+        encrypted_headers = encrypt_headers_for_storage(data["headers"])
+        data["headers"] = carry_over_blank_secrets(encrypted_headers, req.headers, is_sensitive_header)
     if "auth" in data:
-        data["auth"] = encrypt_auth_for_storage(data["auth"])
+        encrypted_auth = encrypt_auth_for_storage(data["auth"])
+        data["auth"] = carry_over_blank_secrets(encrypted_auth, req.auth, is_sensitive_auth_field)
     if "method" in data:
         data["method"] = data["method"].upper()
         data["is_mutating"] = data["method"] in _MUTATING_METHODS

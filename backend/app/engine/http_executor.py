@@ -63,6 +63,17 @@ def build_httpx_request_kwargs(request_def: dict) -> dict:
             params[key_name] = key_value
         else:
             headers[key_name] = key_value
+    elif auth_type == "custom":
+        # Header personalizado: nome e valor livres, sempre enviado como
+        # header (nunca na URL/query) - reaproveita os MESMOS campos
+        # key_name/api_key do tipo "api_key" (mesmo formato, sem o seletor
+        # de local), entao a criptografia/mascaramento em security.py ja
+        # cobre isso automaticamente sem nenhuma mudanca (a chave "api_key"
+        # ja esta em _SENSITIVE_AUTH_FIELDS).
+        key_name = auth.get("key_name", "")
+        key_value = decrypt_value(auth.get("api_key", ""))
+        if key_name:
+            headers[key_name] = key_value
     elif auth_type == "basic":
         # httpx cuida do Basic Auth encoding; passamos via kwarg 'auth' abaixo.
         pass

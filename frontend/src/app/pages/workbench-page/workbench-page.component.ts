@@ -13,6 +13,7 @@ import { BusinessRulesPanelComponent } from './business-rules-panel/business-rul
 import { RuleBuilderComponent } from './rule-builder/rule-builder.component'
 import { NegativeCasesPanelComponent } from './negative-cases-panel/negative-cases-panel.component'
 import { AskAboutResponseComponent } from './ask-about-response/ask-about-response.component'
+import { EditRequestModalComponent } from './edit-request-modal/edit-request-modal.component'
 import type { Check, RequestDef, Rule } from '../../core/models'
 
 @Component({
@@ -29,6 +30,7 @@ import type { Check, RequestDef, Rule } from '../../core/models'
     RuleBuilderComponent,
     NegativeCasesPanelComponent,
     AskAboutResponseComponent,
+    EditRequestModalComponent,
   ],
   template: `
     @if (!req()) {
@@ -49,12 +51,23 @@ import type { Check, RequestDef, Rule } from '../../core/models'
               <a [routerLink]="['/projects', projectId, 'requests', requestId, 'history']" class="btn-secondary">
                 📜 Histórico
               </a>
-              <button class="btn-secondary" [disabled]="probePending()" (click)="testarApi(false)">
+              <button class="btn-secondary cursor-pointer" (click)="showEditModal.set(true)">✏️ Editar API</button>
+              <button class="btn-secondary cursor-pointer" [disabled]="probePending()" (click)="testarApi(false)">
                 {{ probePending() ? 'Testando...' : '🚀 Testar API' }}
               </button>
             </div>
           </div>
         </div>
+
+        @if (editSavedFlash()) {
+          <div class="rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">
+            ✅ Configuração da API atualizada com sucesso.
+          </div>
+        }
+
+        @if (showEditModal()) {
+          <app-edit-request-modal [req]="req()!" (closed)="showEditModal.set(false)" (saved)="onRequestSaved($event)" />
+        }
 
         @if (pendingConfirm()) {
           <div class="banner-warning">
@@ -181,6 +194,8 @@ export class WorkbenchPageComponent {
   rules = signal<Rule[]>([])
   selectedAuto = signal<Set<string>>(new Set())
   pendingConfirm = signal<'probe' | 'execute' | null>(null)
+  showEditModal = signal(false)
+  editSavedFlash = signal(false)
 
   probePending = signal(false)
   probeError = signal<string | null>(null)
@@ -208,6 +223,13 @@ export class WorkbenchPageComponent {
 
   private reloadRules() {
     this.api.listRules(this.requestId).then((r) => this.rules.set(r))
+  }
+
+  onRequestSaved(updated: RequestDef) {
+    this.req.set(updated)
+    this.showEditModal.set(false)
+    this.editSavedFlash.set(true)
+    setTimeout(() => this.editSavedFlash.set(false), 3000)
   }
 
   async testarApi(confirm: boolean) {

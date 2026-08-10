@@ -6,10 +6,12 @@ export interface Project {
 }
 
 export interface AuthDef {
-  type: 'none' | 'bearer' | 'basic' | 'api_key'
+  type: 'none' | 'bearer' | 'basic' | 'api_key' | 'custom'
   token?: string
   username?: string
   password?: string
+  // api_key/key_name também são reaproveitados pelo tipo 'custom' (header
+  // personalizado: mesmo formato nome+valor, sempre enviado como header).
   api_key?: string
   key_name?: string
   location?: 'header' | 'query'
