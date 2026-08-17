@@ -2,7 +2,8 @@ import { Component, inject, signal } from '@angular/core'
 import { FormsModule } from '@angular/forms'
 import { RouterLink } from '@angular/router'
 import { ApiService } from '../../core/services/api.service'
-import type { Project } from '../../core/models'
+import { ApiError } from '../../core/services/api-error'
+import type { ExportBundle, ImportSummary, Project } from '../../core/models'
 
 @Component({
   selector: 'app-projects-page',
@@ -18,10 +19,34 @@ import type { Project } from '../../core/models'
         <p class="dashboard-subtitle">Plataforma universal de testes automatizados de APIs</p>
       </div>
 
-      <div class="mb-5 flex items-center justify-between">
+      <div class="mb-5 flex flex-wrap items-center justify-between gap-2">
         <h2 class="dashboard-section-title">Projetos</h2>
-        <button class="btn-primary dashboard-btn-primary" (click)="showForm.set(!showForm())">+ Criar projeto</button>
+        <div class="flex items-center gap-2">
+          <label class="btn-secondary cursor-pointer">
+            📥 Importar testes
+            <input class="hidden" type="file" accept="application/json,.json" (change)="onImportFileSelected($event)" />
+          </label>
+          <button class="btn-primary dashboard-btn-primary" (click)="showForm.set(!showForm())">+ Criar projeto</button>
+        </div>
       </div>
+
+      @if (importPending()) {
+        <p class="mb-4 text-sm text-foreground-muted">Importando...</p>
+      }
+      @if (importError()) {
+        <div class="banner-danger mb-4 text-sm">{{ importError() }}</div>
+      }
+      @if (importSummary(); as s) {
+        <div class="banner-warning mb-4 text-sm">
+          <p class="font-medium">
+            ✅ Projeto "{{ s.project.name }}" importado: {{ s.requests_imported }} API(s),
+            {{ s.rules_imported }} regra(s), {{ s.scenarios_imported }} cenário(s), {{ s.datasets_imported }} massa(s).
+          </p>
+          @for (w of s.warnings; track w) {
+            <p class="mt-1">⚠️ {{ w }}</p>
+          }
+        </div>
+      }
 
       @if (showForm()) {
         <form class="dashboard-form-card mb-6" (submit)="onCreate($event)">
@@ -75,6 +100,9 @@ import type { Project } from '../../core/models'
                 }
               </span>
             </a>
+            <button class="dashboard-delete-btn mr-2 text-foreground-muted hover:text-foreground" (click)="onExport(p)">
+              📤 exportar
+            </button>
             <button class="dashboard-delete-btn" (click)="onDelete(p)">excluir</button>
           </li>
         }
@@ -91,6 +119,10 @@ export class ProjectsPageComponent {
   name = signal('')
   description = signal('')
   showForm = signal(false)
+
+  importPending = signal(false)
+  importError = signal<string | null>(null)
+  importSummary = signal<ImportSummary | null>(null)
 
   constructor() {
     this.reload()
@@ -123,5 +155,46 @@ export class ProjectsPageComponent {
     if (!confirm(`Excluir o projeto "${p.name}"? Isso remove também suas requisições e testes.`)) return
     await this.api.deleteProject(p.id)
     this.reload()
+  }
+
+  async onExport(p: Project) {
+    const bundle = await this.api.exportProject(p.id)
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `testflow-${p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  onImportFileSelected(event: Event) {
+    const input = event.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+    this.importError.set(null)
+    this.importSummary.set(null)
+    const reader = new FileReader()
+    reader.onload = async () => {
+      let bundle: ExportBundle
+      try {
+        bundle = JSON.parse(String(reader.result ?? ''))
+      } catch {
+        this.importError.set('Arquivo inválido: não é um JSON válido.')
+        return
+      }
+      this.importPending.set(true)
+      try {
+        const summary = await this.api.importProject(bundle)
+        this.importSummary.set(summary)
+        this.reload()
+      } catch (err) {
+        this.importError.set(err instanceof ApiError ? err.message : (err as Error).message)
+      } finally {
+        this.importPending.set(false)
+        input.value = ''
+      }
+    }
+    reader.readAsText(file)
   }
 }

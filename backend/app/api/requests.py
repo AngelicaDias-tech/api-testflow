@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
+from app.api._common import MUTATING_METHODS, to_engine_dict
+from app.core.error_messages import friendly_status_message
 from app.core.security import (
     carry_over_blank_secrets,
     encrypt_auth_for_storage,
@@ -17,12 +19,10 @@ from app.core.security import (
 from app.db.database import get_session
 from app.db.models import ApiRequestDef
 from app.engine.discovery import discover_checks
-from app.engine.http_executor import execute_request
-from app.schemas import ProbeOut, RequestCreate, RequestOut, RequestUpdate
+from app.engine.http_executor import build_sent_snapshot, execute_request
+from app.schemas import ProbeOut, RequestCreate, RequestOut, RequestUpdate, SentRequestOut
 
 router = APIRouter(prefix="/api/requests", tags=["requests"])
-
-_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 def _to_out(req: ApiRequestDef) -> RequestOut:
@@ -46,16 +46,6 @@ def _to_out(req: ApiRequestDef) -> RequestOut:
     )
 
 
-def _to_engine_dict(req: ApiRequestDef) -> dict:
-    return {
-        "method": req.method,
-        "url": req.url,
-        "headers": req.headers,
-        "query_params": req.query_params,
-        "body": req.body,
-        "body_type": req.body_type,
-        "auth": req.auth,
-    }
 
 
 @router.get("", response_model=list[RequestOut])
@@ -81,7 +71,7 @@ def create_request(payload: RequestCreate, session: Session = Depends(get_sessio
         body=payload.body,
         body_type=payload.body_type,
         auth=encrypt_auth_for_storage(payload.auth),
-        is_mutating=payload.method.upper() in _MUTATING_METHODS,
+        is_mutating=payload.method.upper() in MUTATING_METHODS,
     )
     session.add(req)
     session.commit()
@@ -111,7 +101,7 @@ def update_request(request_id: str, payload: RequestUpdate, session: Session = D
         data["auth"] = carry_over_blank_secrets(encrypted_auth, req.auth, is_sensitive_auth_field)
     if "method" in data:
         data["method"] = data["method"].upper()
-        data["is_mutating"] = data["method"] in _MUTATING_METHODS
+        data["is_mutating"] = data["method"] in MUTATING_METHODS
     for key, value in data.items():
         setattr(req, key, value)
     req.updated_at = datetime.now(UTC)
@@ -147,9 +137,15 @@ def probe_request(request_id: str, confirm: bool = False, session: Session = Dep
             "(confirm=true) para executar de verdade.",
         )
 
-    ctx = execute_request(_to_engine_dict(req), timeout=15.0)
+    engine_dict = to_engine_dict(req)
+    ctx = execute_request(engine_dict, timeout=15.0)
+    sent = SentRequestOut(**build_sent_snapshot(engine_dict))
     if ctx.get("error"):
-        raise HTTPException(502, f"Falha ao chamar a API: {ctx['error']}")
+        # Erro de TRANSPORTE (nunca chegou a existir uma resposta HTTP) - já
+        # amigável e sem segredo, mas ainda assim é um problema de
+        # conectividade/URL externo ao TestFlow, por isso HTTP 502 (Bad
+        # Gateway) continua fazendo sentido como status desta rota.
+        raise HTTPException(502, ctx["error"])
 
     req.last_status_code = ctx["status_code"]
     req.last_headers = ctx["headers"]
@@ -169,5 +165,8 @@ def probe_request(request_id: str, confirm: bool = False, session: Session = Dep
         json_valid=ctx["json_valid"],
         response_time_ms=ctx["response_time_ms"],
         error=ctx["error"],
+        error_detail=ctx.get("error_detail"),
+        status_message=friendly_status_message(ctx["status_code"]),
         discovered_checks=discovered,
+        sent_request=sent,
     )

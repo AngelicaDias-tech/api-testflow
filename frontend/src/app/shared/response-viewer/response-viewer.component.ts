@@ -19,7 +19,20 @@ import type { ProbeResult } from '../../core/models'
         }
       </div>
       @if (probe.error) {
-        <p class="mb-3 text-sm text-danger">Erro: {{ probe.error }}</p>
+        <div class="mb-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+          <p>⚠️ {{ probe.error }}</p>
+          @if (probe.error_detail) {
+            <details class="mt-1">
+              <summary class="cursor-pointer text-xs text-danger/80">Detalhes técnicos</summary>
+              <p class="mono mt-1 text-xs text-danger/80">{{ probe.error_detail }}</p>
+            </details>
+          }
+        </div>
+      }
+      @if (!probe.error && probe.status_message) {
+        <p class="mb-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+          ℹ️ {{ probe.status_message }}
+        </p>
       }
       <details open>
         <summary class="cursor-pointer text-sm font-medium text-foreground-muted">Response body</summary>

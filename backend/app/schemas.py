@@ -82,6 +82,19 @@ class RequestOut(BaseModel):
     last_probed_at: datetime | None
 
 
+class SentRequestOut(BaseModel):
+    """Request EFETIVAMENTE montado e enviado (melhoria 2) - sempre com
+    valores sensiveis mascarados. Ver app.engine.http_executor.build_sent_snapshot."""
+
+    method: str
+    url: str
+    query_params: dict[str, str]
+    headers: dict[str, str]
+    auth_type: str
+    body: str | None
+    body_type: str
+
+
 class ProbeOut(BaseModel):
     status_code: int | None
     headers: dict[str, str]
@@ -91,7 +104,10 @@ class ProbeOut(BaseModel):
     json_valid: bool
     response_time_ms: float
     error: str | None
+    error_detail: str | None = None
+    status_message: str | None = None
     discovered_checks: list[dict]
+    sent_request: SentRequestOut | None = None
 
 
 class RuleCreate(BaseModel):
@@ -166,6 +182,26 @@ class ExplainFailureIn(BaseModel):
     result_id: str
 
 
+class NlToRulesIn(BaseModel):
+    """Função 2 do Assistente de IA ("Analisar requisito"): linguagem
+    natural de verdade (ex: "Clientes PREMIUM devem estar ativos"), ao
+    contrário de GenerateRulesIn (Função 1, sintaxe técnica explícita)."""
+
+    text: str
+    response_ctx: dict[str, Any] | None = None
+
+
+class ChatIn(BaseModel):
+    message: str
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class SuggestTestDataIn(BaseModel):
+    variables: list[str]
+    response_ctx: dict[str, Any] | None = None
+    count: int = 10
+
+
 class TestResultOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -185,6 +221,24 @@ class TestResultOut(BaseModel):
     duration_ms: float | None
 
 
+class ScenarioCreate(BaseModel):
+    name: str
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScenarioUpdate(BaseModel):
+    name: str | None = None
+    variables: dict[str, Any] | None = None
+
+
+class ScenarioOut(BaseModel):
+    id: str
+    request_id: str
+    name: str
+    variables: dict[str, Any]
+    created_at: datetime
+
+
 class ExecutionOut(BaseModel):
     id: str
     request_id: str
@@ -197,7 +251,150 @@ class ExecutionOut(BaseModel):
     skipped: int
     status: str
     error_message: str | None
+    scenario_id: str | None = None
+    row_index: int | None = None
+    variables_used: dict[str, Any] | None = None
+    sent_request: SentRequestOut | None = None
     results: list[TestResultOut] = Field(default_factory=list)
+
+
+class CsvImportPreviewIn(BaseModel):
+    csv_text: str
+
+
+class CsvImportPreviewOut(BaseModel):
+    columns: list[str]
+    rows: list[dict[str, Any]]
+    errors: list[str]
+
+
+class TestDataSetCreate(BaseModel):
+    name: str
+    columns: list[str]
+    rows: list[dict[str, Any]]
+
+
+class TestDataSetOut(BaseModel):
+    id: str
+    request_id: str
+    name: str
+    columns: list[str]
+    rows: list[dict[str, Any]]
+    created_at: datetime
+
+
+class BatchExecutionRowOut(BaseModel):
+    row_index: int
+    variables: dict[str, Any]
+    execution_id: str
+    outcome: str  # "passed" (0 failed) | "failed" (>=1 failed) | "error"
+    total: int
+    passed: int
+    failed: int
+
+
+class BatchExecutionOut(BaseModel):
+    id: str
+    request_id: str
+    dataset_id: str
+    started_at: datetime
+    finished_at: datetime | None
+    total_cases: int
+    passed_cases: int
+    failed_cases: int
+    status: str
+    rows: list[BatchExecutionRowOut] = Field(default_factory=list)
+
+
+EXPORT_SCHEMA_VERSION = "1.0"
+
+
+class ExportAuth(BaseModel):
+    """Auth exportada SEM nenhum valor secreto - so o "formato" (tipo,
+    nome do header/param, usuario). token/password/api_key nunca aparecem
+    aqui (ver app/api/export_import.py:_strip_auth_secrets)."""
+
+    type: str = "none"
+    key_name: str | None = None
+    location: str | None = None
+    username: str | None = None
+
+
+class ExportRule(BaseModel):
+    source: str
+    category: str
+    field: str | None
+    operator: str
+    expected: str | None
+    description: str
+    enabled: bool
+    array_path: str | None = None
+    condition_field: str | None = None
+    condition_operator: str | None = None
+    condition_expected: str | None = None
+
+
+class ExportScenario(BaseModel):
+    name: str
+    variables: dict[str, Any]
+
+
+class ExportDataset(BaseModel):
+    name: str
+    columns: list[str]
+    rows: list[dict[str, Any]]
+
+
+class ExportRequest(BaseModel):
+    name: str
+    method: str
+    url: str
+    headers: dict[str, str]  # so headers NAO sensiveis (sensiveis sao omitidos, nao mascarados)
+    query_params: dict[str, str]
+    body: str | None
+    body_type: str
+    auth: ExportAuth
+    rules: list[ExportRule] = Field(default_factory=list)
+    scenarios: list[ExportScenario] = Field(default_factory=list)
+    datasets: list[ExportDataset] = Field(default_factory=list)
+
+
+class ExportProjectMeta(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class ExportBundle(BaseModel):
+    """Arquivo de exportacao (melhoria "Exportar/Importar testes").
+    `testflow_export_version` existe para permitir evoluir o formato (ex:
+    adicionar um novo campo) sem quebrar a leitura de arquivos ja
+    exportados - ver app/api/export_import.py."""
+
+    testflow_export_version: str = EXPORT_SCHEMA_VERSION
+    exported_at: datetime
+    project: ExportProjectMeta
+    requests: list[ExportRequest] = Field(default_factory=list)
+
+
+class ImportBundleIn(BaseModel):
+    """Mesma estrutura de ExportBundle, mas como entrada (o que o usuario
+    envia ao importar) - schemas separados de proposito: o de entrada
+    nunca deveria aceitar campos que so fazem sentido na saida, e evolucoes
+    futuras de import/export podem divergir sem acoplar os dois lados."""
+
+    testflow_export_version: str
+    project: ExportProjectMeta
+    requests: list[ExportRequest] = Field(default_factory=list)
+
+
+class ImportSummaryOut(BaseModel):
+    project: ProjectOut
+    requests_imported: int
+    rules_imported: int
+    scenarios_imported: int
+    datasets_imported: int
+    requests_needing_auth: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ExecutionSummaryOut(BaseModel):

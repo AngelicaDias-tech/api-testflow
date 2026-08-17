@@ -2,6 +2,7 @@ import { Component, inject, signal } from '@angular/core'
 import { ActivatedRoute, RouterLink } from '@angular/router'
 import { ApiService } from '../../core/services/api.service'
 import { SourceBadgeComponent } from '../../shared/source-badge/source-badge.component'
+import { RequestViewerComponent } from '../../shared/request-viewer/request-viewer.component'
 import type { Execution, TestResult } from '../../core/models'
 
 const OUTCOME_ICON: Record<string, string> = { passed: '🟢', failed: '🔴', skipped: '⚪', error: '🔴' }
@@ -9,7 +10,7 @@ const OUTCOME_ICON: Record<string, string> = { passed: '🟢', failed: '🔴', s
 @Component({
   selector: 'app-execution-page',
   standalone: true,
-  imports: [RouterLink, SourceBadgeComponent],
+  imports: [RouterLink, SourceBadgeComponent, RequestViewerComponent],
   template: `
     @if (isLoading() || !execution()) {
       <p class="text-foreground-muted">Carregando...</p>
@@ -20,7 +21,21 @@ const OUTCOME_ICON: Record<string, string> = { passed: '🟢', failed: '🔴', s
             ← Voltar para a API
           </a>
           <h1 class="mt-1 text-2xl font-bold text-foreground">Resultado da execução</h1>
+          @if (execution()!.variables_used) {
+            <p class="mt-1 text-xs text-foreground-muted">
+              🧩 Executado com variáveis: <code class="mono">{{ variablesPreview() }}</code>
+            </p>
+          }
         </div>
+
+        @if (execution()!.sent_request) {
+          <details>
+            <summary class="cursor-pointer text-sm font-medium text-foreground-muted">📤 Ver request enviado nesta execução</summary>
+            <div class="mt-2">
+              <app-request-viewer [sent]="execution()!.sent_request!" />
+            </div>
+          </details>
+        }
 
         <div class="card grid grid-cols-2 gap-4 p-6 sm:grid-cols-5">
           <div>
@@ -147,6 +162,10 @@ export class ExecutionPageComponent {
 
   icon(outcome: string): string {
     return OUTCOME_ICON[outcome] ?? ''
+  }
+
+  variablesPreview(): string {
+    return JSON.stringify(this.execution()?.variables_used ?? {})
   }
 
   select(r: TestResult) {

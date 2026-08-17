@@ -2,17 +2,23 @@ import { Injectable, inject } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import type {
+  BatchExecution,
   Check,
+  CsvImportPreview,
   Execution,
   ExecutionSummary,
+  ExportBundle,
   GenerateRulesResult,
   ImportPreview,
+  ImportSummary,
   NegativeCase,
   ProbeResult,
   Project,
   RequestDef,
   Rule,
   Scenario,
+  TestDataSet,
+  TestScenario,
 } from '../models'
 import { ApiError } from './api-error'
 
@@ -52,6 +58,11 @@ export class ApiService {
     this.request<Project>('/projects', { method: 'POST', body: { name, description } })
   deleteProject = (id: string) => this.request<void>(`/projects/${id}`, { method: 'DELETE' })
 
+  // Exportar/Importar testes
+  exportProject = (projectId: string) => this.request<ExportBundle>(`/projects/${projectId}/export`)
+  importProject = (bundle: ExportBundle) =>
+    this.request<ImportSummary>('/projects/import', { method: 'POST', body: bundle })
+
   // Import
   importCurl = (curl_command: string) =>
     this.request<ImportPreview>('/import/curl', { method: 'POST', body: { curl_command } })
@@ -86,6 +97,40 @@ export class ApiService {
   listExecutions = (requestId: string) => this.request<ExecutionSummary[]>(`/requests/${requestId}/executions`)
   getExecution = (executionId: string) => this.request<Execution>(`/executions/${executionId}`)
 
+  // Cenários de teste manuais
+  listScenarios = (requestId: string) => this.request<TestScenario[]>(`/requests/${requestId}/scenarios`)
+  createScenario = (requestId: string, name: string, variables: Record<string, unknown>) =>
+    this.request<TestScenario>(`/requests/${requestId}/scenarios`, { method: 'POST', body: { name, variables } })
+  updateScenario = (requestId: string, scenarioId: string, payload: Partial<TestScenario>) =>
+    this.request<TestScenario>(`/requests/${requestId}/scenarios/${scenarioId}`, { method: 'PUT', body: payload })
+  deleteScenario = (requestId: string, scenarioId: string) =>
+    this.request<void>(`/requests/${requestId}/scenarios/${scenarioId}`, { method: 'DELETE' })
+  executeScenario = (requestId: string, scenarioId: string, confirm = false) =>
+    this.request<Execution>(`/requests/${requestId}/scenarios/${scenarioId}/execute?confirm=${confirm}`, {
+      method: 'POST',
+    })
+
+  // Massas de teste via CSV
+  previewCsv = (requestId: string, csv_text: string) =>
+    this.request<CsvImportPreview>(`/requests/${requestId}/datasets/preview-csv`, {
+      method: 'POST',
+      body: { csv_text },
+    })
+  createDataset = (requestId: string, name: string, columns: string[], rows: Record<string, unknown>[]) =>
+    this.request<TestDataSet>(`/requests/${requestId}/datasets`, {
+      method: 'POST',
+      body: { name, columns, rows },
+    })
+  listDatasets = (requestId: string) => this.request<TestDataSet[]>(`/requests/${requestId}/datasets`)
+  deleteDataset = (requestId: string, datasetId: string) =>
+    this.request<void>(`/requests/${requestId}/datasets/${datasetId}`, { method: 'DELETE' })
+  executeDataset = (requestId: string, datasetId: string, confirm = false) =>
+    this.request<BatchExecution>(`/requests/${requestId}/datasets/${datasetId}/execute?confirm=${confirm}`, {
+      method: 'POST',
+    })
+  listDatasetExecutions = (requestId: string, datasetId: string) =>
+    this.request<BatchExecution[]>(`/requests/${requestId}/datasets/${datasetId}/executions`)
+
   // AI
   aiStatus = () => this.request<{ name: string; available: boolean }>('/ai/status')
   aiSuggestFromResponse = (response_ctx: unknown, discovered_checks: Check[]) =>
@@ -105,4 +150,19 @@ export class ApiService {
   // Função 2: cenários de valor para uma regra já estruturada.
   aiSuggestScenarios = (check: Partial<Check>) =>
     this.request<{ scenarios: Scenario[] }>('/ai/suggest-scenarios', { method: 'POST', body: { check } })
+  // Função "Analisar requisito": linguagem natural de verdade (diferente de aiGenerateRules, sintaxe técnica).
+  aiNlToRules = (text: string, response_ctx?: unknown) =>
+    this.request<GenerateRulesResult & { unparsed: string[] }>('/ai/nl-to-rules', {
+      method: 'POST',
+      body: { text, response_ctx },
+    })
+  // Assistente de IA contextual (chat livre).
+  aiChat = (message: string, context: Record<string, unknown>) =>
+    this.request<{ answer: string }>('/ai/chat', { method: 'POST', body: { message, context } })
+  // IA para massas: gera casos candidatos para as variáveis {{var}} já usadas pela API/regras.
+  aiSuggestTestData = (requestId: string, count = 10, variables: string[] = []) =>
+    this.request<{ columns: string[]; rows: Record<string, unknown>[] }>(
+      `/ai/requests/${requestId}/suggest-test-data`,
+      { method: 'POST', body: { variables, count } },
+    )
 }

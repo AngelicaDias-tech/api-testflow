@@ -74,6 +74,30 @@ class AIProvider(ABC):
         usuario quem escolhe quais cenarios quer usar; o pytest quem de
         fato decide quando o cenario virar uma execucao real."""
 
+    @abstractmethod
+    def chat(self, message: str, context: dict) -> str:
+        """Assistente contextual de proposito geral (melhoria "Assistente de
+        IA"): responde em linguagem natural perguntas livres sobre a API/
+        resposta/regras/erro atual (ex: "explique essa API", "essa regra
+        esta correta?", "explique esse 401"). `context` ja vem MONTADO e
+        MASCARADO pelo chamador (ver app/ai/context.py) - nunca inclui
+        segredo. Como todo metodo desta interface, e sempre uma resposta de
+        LEITURA: nunca cria uma Rule, nunca decide PASS/FAIL, nunca executa
+        uma chamada HTTP."""
+
+    @abstractmethod
+    def suggest_test_data(self, variables: list[str], response_ctx: dict | None, count: int) -> dict:
+        """Gera uma MASSA de teste candidata (melhoria "IA para massas"):
+        `count` casos para as variaveis `{{var}}` ja identificadas pelo
+        CHAMADOR (request + regras, ver app.engine.templating.
+        find_placeholders, usado em app/api/ai.py) - o provider so decide
+        que VALOR plausivel dar a cada variavel, nao quais variaveis
+        existem. Formato de saida: {"columns": [str,...], "rows":
+        [dict,...]}, no mesmo formato aceito por POST /requests/{id}/
+        datasets (ver app/api/datasets.py). Nunca persiste nada nem executa
+        nenhuma chamada - o usuario revisa e confirma pelo MESMO fluxo de
+        importacao de CSV."""
+
     def is_available(self) -> bool:
         return True
 

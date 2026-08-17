@@ -84,6 +84,8 @@ describe('WorkbenchPageComponent — persistência da resposta da API entre tela
     listRules: jest.Mock
     probeRequest: jest.Mock
     executeTests: jest.Mock
+    listScenarios: jest.Mock
+    listDatasets: jest.Mock
   }
 
   beforeEach(() => {
@@ -92,6 +94,8 @@ describe('WorkbenchPageComponent — persistência da resposta da API entre tela
       listRules: jest.fn().mockResolvedValue([approvedRule]),
       probeRequest: jest.fn().mockResolvedValue(mockProbe),
       executeTests: jest.fn(),
+      listScenarios: jest.fn().mockResolvedValue([]),
+      listDatasets: jest.fn().mockResolvedValue([]),
     }
   })
 

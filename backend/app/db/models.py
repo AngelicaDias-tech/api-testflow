@@ -95,6 +95,50 @@ class Rule(SQLModel, table=True):
     condition_expected: str | None = None
 
 
+class Scenario(SQLModel, table=True):
+    """Cenario de teste manual (melhoria 'Cenarios de Teste'): um conjunto
+    NOMEADO de variaveis (ex: cpf/idade/valor) que alimenta os placeholders
+    `{{var}}` da ApiRequestDef na hora de executar - sem alterar a
+    configuracao original da API. Ver app/engine/templating.py."""
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    request_id: str = Field(foreign_key="apirequestdef.id", index=True)
+    name: str
+    variables: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=_now)
+
+
+class TestDataSet(SQLModel, table=True):
+    """Massa de teste importada de CSV (ou, futuramente, JSON) - melhoria
+    'Massas de teste'. Cada linha vira um dict de variaveis, exatamente
+    como um Scenario, so que em lote. Guardado como JSON unico (nao uma
+    tabela filha por linha): o volume esperado (dezenas/centenas de casos)
+    nao justifica a complexidade de uma tabela normalizada a mais."""
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    request_id: str = Field(foreign_key="apirequestdef.id", index=True)
+    name: str
+    columns: list = Field(default_factory=list, sa_column=Column(JSON))
+    rows: list = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=_now)
+
+
+class BatchExecution(SQLModel, table=True):
+    """Agrega N Execution (uma por linha de uma TestDataSet) rodadas em
+    lote - nao reimplementa nada do motor de execucao, so agrupa e resume
+    Execution/TestResult ja existentes (ver app/api/executions.py)."""
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    request_id: str = Field(foreign_key="apirequestdef.id", index=True)
+    dataset_id: str = Field(foreign_key="testdataset.id", index=True)
+    started_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None
+    total_cases: int = 0
+    passed_cases: int = 0
+    failed_cases: int = 0
+    status: str = "running"  # running | completed | error
+
+
 class Execution(SQLModel, table=True):
     """Uma rodada de execucao de testes (pytest) para uma ApiRequestDef."""
 
@@ -109,6 +153,18 @@ class Execution(SQLModel, table=True):
     skipped: int = 0
     status: str = "running"  # running | completed | error
     error_message: str | None = None
+
+    # Preenchidos apenas quando esta Execution veio de um cenario manual ou
+    # de uma linha de massa (nulos para o fluxo original "Executar testes"
+    # - retrocompativel, nenhuma execucao antiga precisa desses campos).
+    scenario_id: str | None = Field(default=None, foreign_key="scenario.id", index=True)
+    batch_execution_id: str | None = Field(default=None, foreign_key="batchexecution.id", index=True)
+    row_index: int | None = None
+    variables_used: dict | None = Field(default=None, sa_column=Column(JSON))
+    # Request efetivamente enviado (ja mascarado) - auditoria/debugging,
+    # ver app.engine.http_executor.build_sent_snapshot. Tambem preenchido
+    # para o fluxo original, sem quebrar nada existente (so mais um dado).
+    sent_request_snapshot: dict | None = Field(default=None, sa_column=Column(JSON))
 
 
 class TestResult(SQLModel, table=True):

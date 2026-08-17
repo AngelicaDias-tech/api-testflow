@@ -20,7 +20,7 @@
 
 ## 1. O que é o projeto
 
-**API TestFlow** é uma plataforma para testar APIs sem escrever código. Você informa uma URL (ou importa um cURL / arquivo `.bru` do Bruno), a plataforma chama a API de verdade, mostra a resposta real (status, headers, JSON), e permite montar regras de negócio ("o campo X deve ser igual a Y") — manualmente ou com ajuda de uma IA opcional. As regras viram testes reais executados pelo **pytest**, que decide PASS/FAIL/SKIPPED. Resultado: qualquer pessoa do time consegue validar contratos de API sem escrever nenhuma linha de teste.
+**API TestFlow** é uma plataforma para testar APIs sem escrever código. Você informa uma URL (ou importa um cURL / arquivo `.bru` do Bruno), a plataforma chama a API de verdade, mostra a resposta real (status, headers, JSON), e permite montar regras de negócio ("o campo X deve ser igual a Y") — manualmente ou com ajuda de uma IA opcional (que também conversa em chat livre sobre a API). As regras viram testes reais executados pelo **pytest**, que decide PASS/FAIL/SKIPPED. A mesma requisição também pode ser reexecutada com variáveis diferentes via **cenários** ou em lote via **massas de dados (CSV)**, e projetos inteiros podem ser **exportados/importados** como JSON (sem segredos). Resultado: qualquer pessoa do time consegue validar contratos de API — inclusive com dados variados — sem escrever nenhuma linha de teste.
 
 ## 2. Arquitetura
 
@@ -42,9 +42,13 @@
 
 **IA**
 - Provedor padrão: **heurístico** — regras/heurísticas em Python puro, dentro do próprio backend, sem nenhuma API externa e sem custo.
-- Provedor opcional: **Ollama** (modelo local `llama3.2` por padrão), só ativa se configurado explicitamente.
-- Nenhum provedor de nuvem (OpenAI, Anthropic/Claude, Gemini etc.) é usado — confirmado no código, não há nenhuma dependência desse tipo instalada.
-- Para que serve: sugerir regras a partir de sintaxe técnica, sugerir cenários de valor (PASS/FAIL) para uma regra já criada, sugerir cenários negativos e explicar falhas — sempre como sugestão, nunca decide o resultado.
+- Provedor opcional: **OpenAI** (modelo `gpt-4o-mini` por padrão), só ativa se configurado explicitamente via `API_TESTFLOW_AI_PROVIDER=openai` + `OPENAI_API_KEY`. Se a chamada à OpenAI falhar por qualquer motivo, cai automaticamente para o provider heurístico.
+- Para que serve: sugerir regras a partir de sintaxe técnica ou de um requisito em linguagem natural, sugerir cenários de valor (PASS/FAIL) para uma regra já criada, sugerir cenários negativos, gerar massas de dados de teste, responder perguntas em chat livre e explicar falhas — sempre como sugestão/leitura, nunca decide o resultado.
+
+**Testes orientados a dados / cenários**
+- `app/engine/templating.py` resolve placeholders `{{variavel}}` em requisições e regras.
+- **Massas de dados**: importação de CSV (`app/engine/csv_import.py`) para rodar a mesma requisição várias vezes, uma por linha, agrupadas em uma `BatchExecution`.
+- **Cenários**: conjuntos nomeados de variáveis, salvos e reexecutáveis com um clique, sem duplicar a requisição.
 
 ## 3. Tecnologias utilizadas
 
@@ -64,6 +68,7 @@
 | httpx | Cliente HTTP Python | Fazer as chamadas reais às APIs testadas | 0.28.1 |
 | pytest | Framework de testes Python | Motor real de execução (PASS/FAIL/SKIPPED) | 8.3.4 |
 | cryptography | Criptografia | Criptografar tokens/senhas salvos (Fernet) | 44.0.0 |
+| openai | SDK oficial da OpenAI | Provedor de IA opcional (LLM real em nuvem) | 1.109.1 |
 | ruff | Linter Python | Checagem de qualidade do código backend | 0.8.4 |
 | Docker | Containerização | Rodar o backend containerizado (ver seção 11) | — |
 | Git / GitHub | Controle de versão | Versionar e hospedar o código | — |
@@ -173,17 +178,22 @@ Onde o banco SQLite é salvo. Padrão já funciona sem configurar nada.
 ```
 API_TESTFLOW_AI_PROVIDER=heuristic
 ```
-Qual provedor de IA usar: `heuristic` (padrão, sem dependência externa) ou `ollama` (modelo local).
+Qual provedor de IA usar: `heuristic` (padrão, sem dependência externa) ou `openai` (LLM real em nuvem).
 
 ```
-API_TESTFLOW_OLLAMA_URL=http://localhost:11434
+OPENAI_API_KEY=
 ```
-Endereço do servidor Ollama local. Só é usado se `API_TESTFLOW_AI_PROVIDER=ollama`.
+Chave de API da OpenAI. Obrigatória apenas se `API_TESTFLOW_AI_PROVIDER=openai`. Nunca coloque uma chave real em texto no repositório.
 
 ```
-API_TESTFLOW_OLLAMA_MODEL=llama3.2
+API_TESTFLOW_OPENAI_MODEL=gpt-4o-mini
 ```
-Nome do modelo local a ser usado pelo Ollama. Só é usado se `API_TESTFLOW_AI_PROVIDER=ollama`.
+Nome do modelo da OpenAI a ser usado. Só é usado se `API_TESTFLOW_AI_PROVIDER=openai`.
+
+```
+API_TESTFLOW_OPENAI_TIMEOUT=60
+```
+Tempo máximo (segundos) para aguardar resposta da OpenAI antes de cair para o provider heurístico. Só é usado se `API_TESTFLOW_AI_PROVIDER=openai`.
 
 ```
 API_TESTFLOW_SECRET_KEY=
@@ -228,6 +238,7 @@ Fica disponível em **http://localhost:4200**. As chamadas para `/api/*` são au
 5. Dentro do projeto, clique em "🚀 Testar nova API", informe uma URL e clique em "🚀 TESTAR API".
 6. Adicione pelo menos uma regra (manual, na seção "🎯 Regras de Negócio") e clique em "▶ Executar testes".
 7. Confirme que a tela de resultado mostra PASS/FAIL/SKIPPED reais.
+8. (Opcional) Teste os recursos novos: aba "📊 Massas de dados" (importar um CSV e rodar a requisição em lote), aba "🧪 Cenários" (salvar um conjunto de variáveis e reexecutar), e o botão "📤 exportar" na tela de projetos.
 
 **Testes automatizados do próprio projeto:**
 ```bash
@@ -241,11 +252,11 @@ cd frontend && npm test
 ## 9. IA
 
 - **Modelo/provedor usado por padrão:** nenhum modelo de nuvem — um provedor **heurístico** (`HeuristicAIProvider`, `backend/app/ai/heuristic_provider.py`), regras Python que rodam localmente, sem chamada externa e sem custo.
-- **Provedor opcional:** Ollama (`backend/app/ai/ollama_provider.py`), que fala com um servidor Ollama local (`http://localhost:11434`, modelo `llama3.2` por padrão) via `httpx`. Só é ativado com `API_TESTFLOW_AI_PROVIDER=ollama`, e exige o Ollama instalado e rodando separadamente (não é instalado junto do projeto).
-- **Biblioteca/SDK de comunicação:** nenhum SDK de IA — o provedor heurístico não faz chamada nenhuma; o provedor Ollama usa `httpx` (já é dependência do projeto).
-- **Onde fica a configuração:** `backend/app/core/config.py` (lê as variáveis `API_TESTFLOW_AI_PROVIDER`, `API_TESTFLOW_OLLAMA_URL`, `API_TESTFLOW_OLLAMA_MODEL`) e `backend/app/ai/factory.py` (decide qual provedor instanciar).
-- **Funcionalidades que usam IA:** "Gerar regras" (sintaxe técnica → regra estruturada), "Sugerir cenários" (valores de exemplo PASS/FAIL para uma regra já aprovada), sugestão de cenários negativos, explicação de falha de teste.
-- **Funcionalidades que NÃO dependem de IA:** criar/testar API, ver resposta real (JSON/headers/status), construtor manual de regras de negócio, execução dos testes via pytest, PASS/FAIL/SKIPPED, histórico de execuções — tudo isso funciona 100% sem a IA disponível.
+- **Provedor opcional:** OpenAI (`backend/app/ai/openai_provider.py`), que fala com a API da OpenAI (modelo `gpt-4o-mini` por padrão) via o SDK oficial `openai`. Só é ativado com `API_TESTFLOW_AI_PROVIDER=openai` e `OPENAI_API_KEY` configurada.
+- **Biblioteca/SDK de comunicação:** nenhum SDK de IA para o provedor heurístico (não faz chamada nenhuma); o provedor OpenAI usa o SDK oficial `openai` (dependência do projeto).
+- **Onde fica a configuração:** `backend/app/core/config.py` (lê as variáveis `API_TESTFLOW_AI_PROVIDER`, `OPENAI_API_KEY`, `API_TESTFLOW_OPENAI_MODEL`, `API_TESTFLOW_OPENAI_TIMEOUT`) e `backend/app/ai/factory.py` (decide qual provedor instanciar).
+- **Funcionalidades que usam IA:** "Gerar regras" (sintaxe técnica → regra estruturada), "Analisar requisito" (linguagem natural livre → regra estruturada), "Sugerir cenários" (valores de exemplo PASS/FAIL para uma regra já aprovada), sugestão de cenários negativos, geração de massa de dados de teste, chat livre sobre a requisição/resposta, explicação de falha de teste.
+- **Funcionalidades que NÃO dependem de IA:** criar/testar API, ver resposta real (JSON/headers/status) e o request enviado, construtor manual de regras de negócio, cenários manuais, massas de dados via CSV, exportar/importar projeto, execução dos testes via pytest, PASS/FAIL/SKIPPED, histórico de execuções — tudo isso funciona 100% sem a IA disponível.
 
 ## 10. Dependências externas
 
@@ -255,11 +266,11 @@ Precisa de token? Só se a API que você for testar exigir (você configura isso
 É obrigatório? Sim, é o uso central da ferramenta.
 Onde configurar? Direto na interface, ao criar/editar uma requisição.
 
-**Ollama** (opcional)
-Para que serve: rodar um modelo de IA local mais sofisticado que o heurístico padrão.
-Precisa de token? Não, mas precisa estar instalado e rodando na máquina.
+**OpenAI** (opcional)
+Para que serve: rodar um modelo de IA real (LLM em nuvem) mais sofisticado que o heurístico padrão.
+Precisa de token? Sim, `OPENAI_API_KEY`.
 É obrigatório? Não — o projeto funciona completo sem ele.
-Onde configurar? Variáveis `API_TESTFLOW_AI_PROVIDER=ollama`, `API_TESTFLOW_OLLAMA_URL`, `API_TESTFLOW_OLLAMA_MODEL` (seção 6).
+Onde configurar? Variáveis `API_TESTFLOW_AI_PROVIDER=openai`, `OPENAI_API_KEY`, `API_TESTFLOW_OPENAI_MODEL` (seção 6).
 
 Nenhum outro serviço externo (nenhuma API de IA paga, nenhum banco de dados externo) é necessário.
 
@@ -314,6 +325,6 @@ git pull origin master
 - [ ] Variáveis de ambiente revisadas (opcional — funciona sem configurar nada)
 - [ ] Backend rodando em `http://localhost:8000`
 - [ ] Angular rodando em `http://localhost:4200`
-- [ ] IA configurada, se quiser usar Ollama (opcional — funciona sem)
+- [ ] IA configurada, se quiser usar OpenAI (opcional — funciona sem)
 - [ ] Aplicação aberta no navegador
 - [ ] Projeto criado, API testada e execução com PASS/FAIL confirmada

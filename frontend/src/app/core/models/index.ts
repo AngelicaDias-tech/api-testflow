@@ -66,6 +66,17 @@ export interface Check {
   condition_expected?: unknown
 }
 
+// Request EFETIVAMENTE montado e enviado (melhoria 2) — sempre mascarado.
+export interface SentRequest {
+  method: string
+  url: string
+  query_params: Record<string, string>
+  headers: Record<string, string>
+  auth_type: string
+  body: string | null
+  body_type: string
+}
+
 export interface ProbeResult {
   status_code: number | null
   headers: Record<string, string>
@@ -75,7 +86,14 @@ export interface ProbeResult {
   json_valid: boolean
   response_time_ms: number
   error: string | null
+  // detalhe técnico do erro (não é um segredo, mas fica escondido por
+  // padrão na UI — só a mensagem amigável em `error` é exibida direto).
+  error_detail?: string | null
+  // explicação amigável do status_code (ex: o que um 401/404/500 costuma
+  // significar) — null para 2xx/3xx, onde não há nada a explicar.
+  status_message?: string | null
   discovered_checks: Check[]
+  sent_request?: SentRequest | null
 }
 
 export interface Rule {
@@ -124,7 +142,83 @@ export interface Execution {
   skipped: number
   status: string
   error_message: string | null
+  scenario_id?: string | null
+  row_index?: number | null
+  variables_used?: Record<string, unknown> | null
+  sent_request?: SentRequest | null
   results: TestResult[]
+}
+
+// Cenário de teste manual (painel "Cenários de Teste"): um conjunto nomeado
+// de variáveis que alimenta os placeholders {{var}} da API na hora de
+// executar, sem alterar a configuração original salva. Nome diferente de
+// `Scenario` (acima) de propósito — aquele é o cenário de VALOR sugerido
+// pela IA para uma regra ("Função 2"), um conceito diferente.
+export interface TestScenario {
+  id: string
+  request_id: string
+  name: string
+  variables: Record<string, unknown>
+  created_at: string
+}
+
+// Massa de teste via CSV — cada `rows[i]` alimenta os mesmos placeholders
+// {{var}} que um TestScenario, só que em lote (ver core/services/api.service.ts).
+export interface CsvImportPreview {
+  columns: string[]
+  rows: Record<string, unknown>[]
+  errors: string[]
+}
+
+export interface TestDataSet {
+  id: string
+  request_id: string
+  name: string
+  columns: string[]
+  rows: Record<string, unknown>[]
+  created_at: string
+}
+
+export interface BatchExecutionRow {
+  row_index: number
+  variables: Record<string, unknown>
+  execution_id: string
+  outcome: 'passed' | 'failed' | 'error'
+  total: number
+  passed: number
+  failed: number
+}
+
+// Exportar/Importar testes — o bundle é tratado como opaco pelo frontend
+// (ele só baixa/lê o JSON e reenvia; quem valida a estrutura é o backend).
+export interface ExportBundle {
+  testflow_export_version: string
+  exported_at: string
+  project: { name: string; description: string | null }
+  requests: unknown[]
+}
+
+export interface ImportSummary {
+  project: Project
+  requests_imported: number
+  rules_imported: number
+  scenarios_imported: number
+  datasets_imported: number
+  requests_needing_auth: string[]
+  warnings: string[]
+}
+
+export interface BatchExecution {
+  id: string
+  request_id: string
+  dataset_id: string
+  started_at: string
+  finished_at: string | null
+  total_cases: number
+  passed_cases: number
+  failed_cases: number
+  status: string
+  rows: BatchExecutionRow[]
 }
 
 export interface ExecutionSummary {

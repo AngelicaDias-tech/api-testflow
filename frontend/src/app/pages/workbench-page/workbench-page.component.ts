@@ -7,13 +7,14 @@ import { flattenFields } from '../../core/utils/flatten'
 import { MethodBadgeComponent } from '../../shared/method-badge/method-badge.component'
 import { SourceBadgeComponent } from '../../shared/source-badge/source-badge.component'
 import { ResponseViewerComponent } from '../../shared/response-viewer/response-viewer.component'
+import { RequestViewerComponent } from '../../shared/request-viewer/request-viewer.component'
 import { TechnicalHealthPanelComponent } from './technical-health-panel/technical-health-panel.component'
 import { ManualBusinessRulesComponent } from './manual-business-rules/manual-business-rules.component'
-import { BusinessRulesPanelComponent } from './business-rules-panel/business-rules-panel.component'
 import { RuleBuilderComponent } from './rule-builder/rule-builder.component'
-import { NegativeCasesPanelComponent } from './negative-cases-panel/negative-cases-panel.component'
-import { AskAboutResponseComponent } from './ask-about-response/ask-about-response.component'
 import { EditRequestModalComponent } from './edit-request-modal/edit-request-modal.component'
+import { ScenariosPanelComponent } from './scenarios-panel/scenarios-panel.component'
+import { DatasetsPanelComponent } from './datasets-panel/datasets-panel.component'
+import { AssistantPanelComponent } from './assistant-panel/assistant-panel.component'
 import type { Check, RequestDef, Rule } from '../../core/models'
 
 @Component({
@@ -24,13 +25,14 @@ import type { Check, RequestDef, Rule } from '../../core/models'
     MethodBadgeComponent,
     SourceBadgeComponent,
     ResponseViewerComponent,
+    RequestViewerComponent,
     TechnicalHealthPanelComponent,
     ManualBusinessRulesComponent,
-    BusinessRulesPanelComponent,
     RuleBuilderComponent,
-    NegativeCasesPanelComponent,
-    AskAboutResponseComponent,
     EditRequestModalComponent,
+    ScenariosPanelComponent,
+    DatasetsPanelComponent,
+    AssistantPanelComponent,
   ],
   template: `
     @if (!req()) {
@@ -69,14 +71,13 @@ import type { Check, RequestDef, Rule } from '../../core/models'
           <app-edit-request-modal [req]="req()!" (closed)="showEditModal.set(false)" (saved)="onRequestSaved($event)" />
         }
 
-        @if (pendingConfirm()) {
+        @if (pendingConfirm() === 'probe') {
           <div class="banner-warning">
             <p class="text-sm font-medium">
-              ⚠️ {{ req()!.method }} pode alterar dados reais. Confirme para
-              {{ pendingConfirm() === 'probe' ? 'chamar a API agora' : 'executar os testes de verdade' }}.
+              ⚠️ {{ req()!.method }} pode alterar dados reais. Confirme para chamar a API agora.
             </p>
             <button class="btn-danger mt-3" (click)="confirmPending()">
-              Confirmar e {{ pendingConfirm() === 'probe' ? 'chamar a API' : 'executar' }} mesmo assim
+              Confirmar e chamar a API mesmo assim
             </button>
           </div>
         }
@@ -93,13 +94,16 @@ import type { Check, RequestDef, Rule } from '../../core/models'
         }
 
         @if (probe()) {
-          <section>
-            <div class="mb-3 flex items-center justify-between">
-              <h2 class="text-lg font-semibold text-foreground">Response</h2>
+          <section class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <div>
+              <h2 class="mb-3 text-lg font-semibold text-foreground">📤 Request enviado</h2>
+              @if (probe()!.sent_request) {
+                <app-request-viewer [sent]="probe()!.sent_request!" />
+              }
             </div>
-            <app-response-viewer [probe]="probe()!" />
-            <div class="card mt-3 p-4">
-              <app-ask-about-response [probe]="probe()!" />
+            <div>
+              <h2 class="mb-3 text-lg font-semibold text-foreground">📥 Response recebida</h2>
+              <app-response-viewer [probe]="probe()!" />
             </div>
           </section>
         }
@@ -120,31 +124,31 @@ import type { Check, RequestDef, Rule } from '../../core/models'
           <app-manual-business-rules [probe]="probe()!" [isAdding]="addManualPending()" (addRules)="addManual($event)" />
         }
 
-        <app-business-rules-panel
-          [probe]="probe()"
-          [rules]="rules()"
-          [isAdding]="addAiPending()"
-          (addRules)="addAi($event)"
-        />
-
         <details class="card p-5">
           <summary class="cursor-pointer text-sm font-medium text-foreground-muted">
-            Regras avançadas (construtor manual) e cenários negativos sugeridos
+            ➕ Construtor manual de regra (avançado)
           </summary>
-          <div class="mt-4 space-y-6 border-t border-border pt-4">
-            <div>
-              <h3 class="mb-1 text-base font-semibold text-foreground">➕ Adicionar expectativa manualmente</h3>
-              <p class="mb-3 text-sm text-foreground-muted">
-                Regras de negócio — o que VOCÊ define como correto para esta API (ex: status deve ser ACTIVE).
-              </p>
-              <app-rule-builder [fieldOptions]="fieldOptions()" [isAdding]="addOnePending()" (add)="addOne($event)" />
-            </div>
-            <div>
-              <h3 class="mb-3 text-base font-semibold text-foreground">🤖 Cenários negativos sugeridos pela IA</h3>
-              <app-negative-cases-panel [requestId]="requestId" />
-            </div>
+          <div class="mt-4 border-t border-border pt-4">
+            <p class="mb-3 text-sm text-foreground-muted">
+              Regras de negócio — o que VOCÊ define como correto para esta API (ex: status deve ser ACTIVE).
+            </p>
+            <app-rule-builder [fieldOptions]="fieldOptions()" [isAdding]="addOnePending()" (add)="addOne($event)" />
           </div>
         </details>
+
+        <app-assistant-panel
+          [req]="req()"
+          [probe]="probe()"
+          [rules]="rules()"
+          [requestId]="requestId"
+          [isAdding]="addAiPending()"
+          (addRules)="addAi($event)"
+          (datasetCreated)="onDatasetCreated()"
+        />
+
+        <app-scenarios-panel [requestId]="requestId" [projectId]="projectId" />
+
+        <app-datasets-panel [requestId]="requestId" [projectId]="projectId" [refreshToken]="datasetsRefreshToken()" />
 
         <section class="card p-5">
           <div class="mb-3 flex items-center justify-between">
@@ -165,13 +169,29 @@ import type { Check, RequestDef, Rule } from '../../core/models'
             }
           </ul>
 
-          <button
-            class="btn-primary mt-5 w-full text-base"
-            [disabled]="enabledRules().length === 0 || executePending()"
-            (click)="executeTests(false)"
-          >
-            {{ executePending() ? 'Executando pytest...' : '▶ Executar testes' }}
-          </button>
+          <div class="mt-5">
+            @if (pendingConfirm() === 'execute') {
+              <div class="banner-warning">
+                <p class="text-sm font-medium">⚠️ Esta API pode alterar dados reais.</p>
+                <div class="mt-3 flex gap-2">
+                  <button class="btn-secondary" [disabled]="executePending()" (click)="cancelExecuteConfirm()">
+                    Cancelar
+                  </button>
+                  <button class="btn-danger" [disabled]="executePending()" (click)="confirmPending()">
+                    {{ executePending() ? 'Executando pytest...' : 'Confirmar e executar Pytest' }}
+                  </button>
+                </div>
+              </div>
+            } @else {
+              <button
+                class="btn-primary w-full text-base"
+                [disabled]="enabledRules().length === 0 || executePending()"
+                (click)="executeTests(false)"
+              >
+                {{ executePending() ? 'Executando pytest...' : '▶️ Executar Pytest' }}
+              </button>
+            }
+          </div>
         </section>
       </div>
     }
@@ -204,6 +224,7 @@ export class WorkbenchPageComponent {
   addManualPending = signal(false)
   addAiPending = signal(false)
   executePending = signal(false)
+  datasetsRefreshToken = signal(0)
 
   enabledRules = computed(() => this.rules().filter((r) => r.enabled))
   autoRulesCount = computed(() => this.rules().filter((r) => r.source === 'auto').length)
@@ -271,6 +292,10 @@ export class WorkbenchPageComponent {
     else this.executeTests(true)
   }
 
+  cancelExecuteConfirm() {
+    this.pendingConfirm.set(null)
+  }
+
   onToggleAuto(e: { id: string; checked: boolean }) {
     const next = new Set(this.selectedAuto())
     if (e.checked) next.add(e.id)
@@ -327,5 +352,9 @@ export class WorkbenchPageComponent {
   async deleteRule(r: Rule) {
     await this.api.deleteRule(this.requestId, r.id)
     this.reloadRules()
+  }
+
+  onDatasetCreated() {
+    this.datasetsRefreshToken.set(this.datasetsRefreshToken() + 1)
   }
 }

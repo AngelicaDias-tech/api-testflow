@@ -2,7 +2,7 @@
 Provedor de IA padrao: heuristico, 100% local, sem dependencias externas
 e sem custo (secao 12, 28 e 29). E o que garante que "o sistema deve
 funcionar normalmente sem IA" na pratica - ele E a IA que ja vem pronta,
-sem exigir instalar Ollama nem contratar servico pago.
+sem exigir contratar servico pago.
 
 Usa regras/regex sobre linguagem natural em portugues (o idioma do time
 que escreveu o spec) para propor testes. Nao inventa valores de negocio
@@ -22,13 +22,16 @@ analisar o response real da API".
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 import uuid
 from typing import Any
 
 from app.ai.base import AIProvider
+from app.core.error_messages import friendly_status_message
 from app.engine.evaluator import MISSING, get_by_path, type_name
+from app.engine.templating import find_placeholders
 
 _TYPE_WORDS = {
     "numero": "number",
@@ -757,7 +760,9 @@ _STATE_FIELD_HINT = re.compile(r"status|situa[cç][aã]o|estado", re.IGNORECASE)
 _Q_FIELDS_INSIDE_RE = re.compile(
     r"quais\s+campos\s+(?:existem\s+)?(?:tem\s+)?dentro\s+d[eo]\s+(?P<field>[\wÀ-ú.\-]+)", re.IGNORECASE
 )
-_Q_TYPE_RE = re.compile(r"qual\s+(?:é|e)\s+o\s+tipo\s+d[eo]\s+(?P<field>[\wÀ-ú.\-]+)", re.IGNORECASE)
+_Q_TYPE_RE = re.compile(
+    r"qual\s+(?:é|e)\s+o\s+tipo\s+d[eo]\s+(?:campo\s+|propriedade\s+)?(?P<field>[\wÀ-ú.\-]+)", re.IGNORECASE
+)
 _Q_VALUE_RE = re.compile(
     r"qual\s+(?:foi|é|e)\s+(?:o\s+)?(?:retorno|valor)\s+d[oe]\s+campo\s+(?P<field>[\wÀ-ú.\-]+)"
     r"|valor\s+d[oe]\s+campo\s+(?P<field2>[\wÀ-ú.\-]+)",
@@ -1072,6 +1077,12 @@ class HeuristicAIProvider(AIProvider):
     def suggest_scenarios(self, check: dict) -> list[dict]:
         return _build_scenarios(check.get("field", "campo"), check.get("operator", ""), check.get("expected"))
 
+    def chat(self, message: str, context: dict) -> str:
+        return _heuristic_chat(message, context)
+
+    def suggest_test_data(self, variables: list[str], response_ctx: dict | None, count: int) -> dict:
+        return _build_test_data(variables, count)
+
     def explain_failure(self, result: dict, response_ctx: dict | None) -> str:
         field = result.get("field") or "(verificação global)"
         expected = result.get("expected")
@@ -1233,3 +1244,401 @@ def _build_scenarios(field: str, operator: str, expected: Any) -> list[dict]:
         return [scenario(f"(qualquer valor diferente de {expected!r})", "PASS"), scenario(expected, "FAIL")]
 
     return []
+
+
+_CHAT_HTTP_STATUS_RE = re.compile(r"\b([1-5]\d{2})\b")
+# "explic" cobre "explicar"/"explicando"; "expliqu" cobre "explique"/"expliquei"
+# (troca ortografica c->qu do portugues antes de e/i) - sem as duas formas,
+# "Explique esse erro 401" (bem comum) nao batia com o padrao.
+_CHAT_EXPLAIN_RE = re.compile(r"explic|expliqu|o que|por ?que|descrev|resum", re.IGNORECASE)
+_CHAT_COUNT_RE = re.compile(r"\b(\d+)\b")
+_NO_CONTEXT = "Não tenho essa informação no contexto atual."
+
+
+def _chat_has(norm_message: str, *words: str) -> bool:
+    return any(w in norm_message for w in words)
+
+
+def _chat_describe_request(context: dict) -> str:
+    method, url = context.get("method"), context.get("url")
+    if not method and not url:
+        return _NO_CONTEXT
+    parts = [f"Request: {method} {url}."]
+    body = context.get("request_body")
+    parts.append(f"Body enviado: {body[:400]}" if body else "Sem body no request.")
+    headers = context.get("request_headers") or {}
+    if headers:
+        parts.append(f"Headers enviados: {', '.join(headers.keys())}.")
+    auth_type = context.get("auth_type")
+    if auth_type and auth_type != "none":
+        parts.append(f"Usa autenticação do tipo '{auth_type}'.")
+    elif auth_type == "none":
+        parts.append("Sem autenticação configurada.")
+    return " ".join(parts)
+
+
+def _chat_describe_response(context: dict) -> str:
+    status, body = context.get("status_code"), context.get("body_json")
+    error = context.get("error")
+    if error:
+        return f"A chamada não obteve resposta: {error}"
+    if status is None and body is None:
+        return _NO_CONTEXT
+    parts = [f"Response: HTTP {status}." if status is not None else "Ainda sem status HTTP observado."]
+    if context.get("json_valid") is False:
+        parts.append("O corpo não é um JSON válido.")
+    elif isinstance(body, dict) and body:
+        parts.append(f"Campos: {_chat_field_summary(body)}.")
+    elif isinstance(body, list):
+        parts.append(f"É uma lista com {len(body)} item(ns).")
+    return " ".join(parts)
+
+
+def _chat_field_summary(body: Any, limit: int = 20) -> str:
+    if isinstance(body, dict) and body:
+        items = list(body.items())[:limit]
+        return ", ".join(f"{k} ({type_name(v)})" for k, v in items)
+    if isinstance(body, list) and body and isinstance(body[0], dict):
+        items = list(body[0].items())[:limit]
+        return "lista de objetos, cada um com: " + ", ".join(f"{k} ({type_name(v)})" for k, v in items)
+    return ""
+
+
+def _chat_request_field_names(context: dict) -> list[str]:
+    """Nomes de campo/variavel para basear uma massa gerada pelo chat -
+    tenta as chaves do JSON do body enviado (ex: title/price/stock) e,
+    se nao houver, placeholders `{{var}}` no body/URL (ver app.engine.
+    templating). Nunca inventa um nome que nao apareça em um dos dois."""
+    request_body = context.get("request_body")
+    if isinstance(request_body, str) and request_body.strip():
+        try:
+            parsed = json.loads(request_body)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict) and parsed:
+            return list(parsed.keys())
+        placeholders = find_placeholders(request_body)
+        if placeholders:
+            return sorted(placeholders)
+    placeholders = find_placeholders(context.get("url") or "")
+    return sorted(placeholders) if placeholders else []
+
+
+def _chat_fields_mentioned(message: str, known_fields: list[str]) -> list[str]:
+    norm = _strip_accents(message.lower())
+    mentioned = []
+    for f in known_fields:
+        base = _strip_accents(f.split(".")[-1].lower())
+        if base and re.search(rf"\b{re.escape(base)}\b", norm):
+            mentioned.append(f)
+    return mentioned
+
+
+def _chat_suggest_rule_for_field(field: str, body: Any) -> str:
+    value = get_by_path(body, field)
+    base = field.split(".")[-1].lower()
+    if value is MISSING:
+        return f"{field} exists"
+    if isinstance(value, bool):
+        return f"{field} equals {value}"
+    if isinstance(value, int | float):
+        if re.search(r"stock|qty|quantidade|count|total|estoque", base):
+            return f"{field} greater_than_or_equal 0"
+        return f"{field} greater_than 0"
+    if isinstance(value, str):
+        return f"{field} exists"
+    return f"{field} exists"
+
+
+def _chat_scenarios_for_rules(message: str, rules: list[dict], norm: str) -> str:
+    if not rules:
+        return (
+            f"{_NO_CONTEXT} Não há nenhuma regra aprovada ainda para eu basear cenários — adicione uma regra "
+            "primeiro (manualmente ou via Assistente de IA)."
+        )
+    mentioned = _chat_fields_mentioned(message, [r.get("field") or "" for r in rules])
+    target_rules = [r for r in rules if r.get("field") in mentioned] or rules[:1]
+
+    wants_positive = _chat_has(norm, "positiv")
+    wants_negative = _chat_has(norm, "negativ")
+    wants_boundary = _chat_has(norm, "borda", "limite", "fronteira")
+
+    lines = []
+    for rule in target_rules:
+        scenarios = _build_scenarios(rule.get("field", "campo"), rule.get("operator", ""), rule.get("expected"))
+        if not scenarios:
+            continue
+        for s in scenarios:
+            if wants_positive and s["expected_outcome"] != "PASS":
+                continue
+            if wants_negative and s["expected_outcome"] != "FAIL":
+                continue
+            lines.append(f"- {s['description']}")
+    if not lines:
+        return (
+            f"{_NO_CONTEXT} Não consegui gerar cenários "
+            f"{'de borda' if wants_boundary else ''} a partir das regras disponíveis para esse campo."
+        )
+    kind = "positivos" if wants_positive else "negativos" if wants_negative else "de borda/valor"
+    return f"Cenários {kind} sugeridos (revise e aprove antes de rodar):\n" + "\n".join(lines)
+
+
+def _chat_generate_massa(message: str, context: dict) -> str:
+    variables = _chat_request_field_names(context)
+    if not variables:
+        return (
+            f"{_NO_CONTEXT} Não encontrei campos no body/URL desta API para basear uma massa. Use o botão "
+            "'Gerar massa com IA' no painel de Massas de Teste, que analisa a API automaticamente."
+        )
+    count_match = _CHAT_COUNT_RE.search(message)
+    count = min(int(count_match.group(1)), 50) if count_match else 5
+    data = _build_test_data(variables, count)
+    header = ",".join(data["columns"])
+    rows = "\n".join(",".join(str(row.get(c, "")) for c in data["columns"]) for row in data["rows"])
+    return (
+        f"Massa sugerida com {count} caso(s) — revise antes de salvar/executar (use 'Gerar massa com IA' no "
+        f"painel de Massas para confirmar):\n\n{header}\n{rows}"
+    )
+
+
+def _heuristic_chat(message: str, context: dict) -> str:  # noqa: C901 - dispatcher de intenção, complexidade é inerente
+    """Implementação do Assistente de IA (chat) para o provider padrão -
+    determinística, mas com reconhecimento de intenção estruturado (não
+    apenas algumas frases fixas): explica API/request/response, lista
+    campos e tipos, sugere regras/cenários/massa a partir do contexto real,
+    explica status HTTP e falhas. Não sustenta uma conversa livre de
+    verdade (isso exige um LLM real, ver app/ai/openai_provider.py) - quando
+    falta contexto ou a pergunta não é reconhecida, é honesta em vez de
+    inventar uma resposta."""
+    norm = _strip_accents(message.strip().lower())
+
+    status = context.get("status_code")
+    body = context.get("body_json")
+    url = context.get("url")
+    method = context.get("method")
+    rules = context.get("rules") or []
+    execution_result = context.get("execution_result")
+
+    # 1) status HTTP explícito mencionado na pergunta ("explique esse 401") ---
+    status_match = _CHAT_HTTP_STATUS_RE.search(message)
+    if status_match and _CHAT_EXPLAIN_RE.search(message):
+        code = int(status_match.group(1))
+        explanation = friendly_status_message(code)
+        if explanation:
+            return explanation
+        if code < 400:
+            return f"HTTP {code} não é um código de erro — indica sucesso ou redirecionamento."
+
+    # 1.5) "qual foi o status HTTP" (sem número explícito na pergunta) - exige
+    # "http"/"codigo" junto de "status" para não colidir com um CAMPO de
+    # negócio chamado "status" (ex: "qual o valor do campo status"), que é
+    # tratado mais abaixo pelo answer_question genérico.
+    if "status" in norm and not status_match and _chat_has(norm, "http", "codigo"):
+        return f"O status HTTP observado foi {status}." if status is not None else _NO_CONTEXT
+
+    # 2) timeout -----------------------------------------------------------------
+    if _chat_has(norm, "timeout", "tempo limite", "nao respondeu", "demorou"):
+        error = context.get("error") or ""
+        if "tempo limite" in error.lower() or "timeout" in norm:
+            detail = f" (observado agora: {error})" if error else ""
+            return (
+                "Timeout significa que o TestFlow não recebeu resposta da API dentro do tempo configurado"
+                f"{detail}. Isso normalmente indica que a API está lenta, sobrecarregada ou fora do ar — não é "
+                "um problema do TestFlow."
+            )
+
+    # 3) falha de teste / diferença esperado vs atual ----------------------------
+    if _chat_has(norm, "falhou", "falha", "quebrou") or (_chat_has(norm, "diferenc") and "esperado" in norm):
+        if execution_result:
+            field = execution_result.get("field") or "(verificação global)"
+            expected, actual = execution_result.get("expected"), execution_result.get("actual")
+            return (
+                f"O teste em '{field}' esperava {expected!r}, mas a resposta observada trouxe {actual!r}. "
+                "Verifique se a regra ainda reflete o contrato atual da API ou se os dados do ambiente de teste "
+                "mudaram."
+            )
+        return (
+            f"{_NO_CONTEXT} Abra o resultado da execução e use o botão 'Explicar esta falha' para uma análise "
+            "focada nesse teste específico."
+        )
+
+    # 4) criar/sugerir regras para campo(s) mencionado(s) -------------------------
+    if "regra" in norm and _chat_has(norm, "crie", "cria", "sugir", "sugest", "adicion", "gerar"):
+        if not isinstance(body, dict) or not body:
+            return f"{_NO_CONTEXT} Clique em 'Testar API' primeiro para eu ter uma resposta real para analisar."
+        known_fields = _flatten_field_paths(body)
+        mentioned = _chat_fields_mentioned(message, known_fields)
+        target_fields = mentioned or [k for k in body if not isinstance(body[k], dict | list)][:5]
+        suggestions = [_chat_suggest_rule_for_field(f, body) for f in target_fields]
+        if not suggestions:
+            return f"{_NO_CONTEXT} Não identifiquei nenhum campo mencionado na resposta real desta API."
+        lines = "\n".join(f"- {s}" for s in suggestions)
+        return (
+            f"Regras sugeridas a partir da resposta observada (revise e aprove no painel de regras):\n{lines}"
+        )
+
+    # 5) regra "está correta"? (julgamento semântico - honesto sobre o limite) ----
+    if "regra" in norm and _chat_has(norm, "correta", "certa", "faz sentido"):
+        return (
+            "A IA heurística confirma que uma regra é sintaticamente válida (campo/operador/valor reconhecidos "
+            "na resposta real), mas julgar se ela está 'correta' para o seu negócio exige entender o domínio da "
+            "API — isso precisa de um LLM real (configure API_TESTFLOW_AI_PROVIDER=openai) ou de revisão humana."
+        )
+
+    # 6) explicar/listar as regras já aprovadas ------------------------------------
+    if "regra" in norm and _chat_has(norm, "explic", "expliqu", "quais", "liste", "listar"):
+        if not rules:
+            return f"{_NO_CONTEXT} Nenhuma regra aprovada ainda para esta API."
+        lines = "\n".join(f"- {r.get('field')} {r.get('operator')} {r.get('expected')!r}" for r in rules)
+        return f"Regras já aprovadas para esta API ({len(rules)}):\n{lines}"
+
+    # 7) cenários (positivos/negativos/borda) --------------------------------------
+    if _chat_has(norm, "cenario", "caso de teste", "casos de teste"):
+        return _chat_scenarios_for_rules(message, rules, norm)
+
+    # 8) massa de teste ---------------------------------------------------------------
+    if "massa" in norm:
+        return _chat_generate_massa(message, context)
+
+    # 9) campos importantes / o que validar --------------------------------------------
+    if _chat_has(norm, "important") or ("campo" in norm and "valida" in norm):
+        if not isinstance(body, dict) or not body:
+            return f"{_NO_CONTEXT} Clique em 'Testar API' primeiro."
+        result = HeuristicAIProvider().suggest_from_response({"body_json": body, "status_code": status}, [])
+        fields = sorted({s["field"] for s in result["suggestions"] if s.get("field")})
+        if fields:
+            return f"{result['summary']} Campos que parecem relevantes para validar: {', '.join(fields)}."
+        return result["summary"] or "Não identifiquei campos que se destaquem automaticamente nesta resposta."
+
+    # 10) perguntas pontuais sobre a RESPONSE (tipo/valor/existe/campos dentro de X) —
+    # reaproveita answer_question, que já cobre esses padrões com precisão; só usa
+    # o resultado se ele reconheceu algo específico (não a mensagem genérica dele).
+    if isinstance(body, dict) and body:
+        candidate = HeuristicAIProvider().answer_question(message, {"body_json": body, "json_valid": True})
+        if not candidate.startswith("Não entendi exatamente"):
+            return candidate
+
+    # 11) autenticação -------------------------------------------------------------------
+    if _chat_has(norm, "autentic", "token", "bearer", "login"):
+        auth_type = context.get("auth_type")
+        if auth_type is None:
+            return _NO_CONTEXT
+        if auth_type == "none":
+            return "Esta API está configurada SEM autenticação (auth type = none)."
+        return f"Esta API está configurada com autenticação do tipo '{auth_type}'."
+
+    # 12) request possui body? ------------------------------------------------------------
+    if ("body" in norm or "corpo" in norm) and _chat_has(norm, "tem", "possui", "existe", "ha "):
+        request_body = context.get("request_body")
+        if "request_body" not in context and "method" not in context:
+            return _NO_CONTEXT
+        return "Sim, esta requisição envia um body." if request_body else "Não, esta requisição não possui body."
+
+    # 13) headers relevantes ----------------------------------------------------------------
+    if "header" in norm or "cabecalho" in norm:
+        req_headers = context.get("request_headers") or {}
+        resp_headers = context.get("headers") or {}
+        if not req_headers and not resp_headers:
+            return _NO_CONTEXT
+        parts = []
+        if req_headers:
+            parts.append(f"Headers enviados: {', '.join(req_headers.keys())}.")
+        if resp_headers:
+            parts.append(f"Headers recebidos: {', '.join(list(resp_headers.keys())[:15])}.")
+        return " ".join(parts)
+
+    # 14) método HTTP -----------------------------------------------------------------------
+    if "metodo" in norm:
+        return f"Esta API usa o método {method}." if method else _NO_CONTEXT
+
+    # 15) URL ---------------------------------------------------------------------------------
+    if _chat_has(norm, " url", "endereco") or norm.startswith("url"):
+        return f"A URL desta API é {url}." if url else _NO_CONTEXT
+
+    # 16) listar campos do REQUEST ------------------------------------------------------------
+    if "campo" in norm and _chat_has(norm, "request", "enviad", "mandei", "mandou"):
+        names = _chat_request_field_names(context)
+        if names:
+            return f"Campos identificados no request: {', '.join(names)}."
+        request_body = context.get("request_body")
+        return "O request não possui body." if "request_body" in context and not request_body else _NO_CONTEXT
+
+    # 17) listar campos da RESPONSE -----------------------------------------------------------
+    if "campo" in norm and _chat_has(norm, "response", "resposta", "retorno", "retornou"):
+        if isinstance(body, dict) and body:
+            return f"Campos da response: {_chat_field_summary(body)}."
+        return _NO_CONTEXT
+
+    # 18) explicar o REQUEST -------------------------------------------------------------------
+    if _chat_has(norm, "request", "enviei", "mandei") and _chat_has(norm, "explic", "expliqu", "o que"):
+        return _chat_describe_request(context)
+
+    # 19) explicar a RESPONSE -------------------------------------------------------------------
+    mentions_response = _chat_has(norm, "response", "resposta", "retornou", "recebeu", "devolveu")
+    if mentions_response and _CHAT_EXPLAIN_RE.search(norm):
+        return _chat_describe_response(context)
+
+    # 20) "explique o que foi enviado e recebido" (combinado) -----------------------------------
+    if _chat_has(norm, "enviado") and _chat_has(norm, "recebid", "retornou"):
+        return f"{_chat_describe_request(context)}\n{_chat_describe_response(context)}"
+
+    # 21) explicar a API de forma geral (catch-all mais amplo) ----------------------------------
+    if _CHAT_EXPLAIN_RE.search(norm) and _chat_has(norm, "api", "endpoint", "essa chamada"):
+        parts = []
+        if method and url:
+            parts.append(f"Esta é uma chamada {method} para {url}.")
+        if status is not None:
+            parts.append(f"A última resposta observada teve status HTTP {status}.")
+        if isinstance(body, dict) and body:
+            parts.append(f"Campos da response: {_chat_field_summary(body)}.")
+        if context.get("request_body"):
+            parts.append("O request enviado possui body (pergunte 'explique o request' para ver os detalhes).")
+        if rules:
+            parts.append(f"Há {len(rules)} regra(s) de negócio já aprovada(s) para esta API.")
+        if not parts:
+            return f"{_NO_CONTEXT} Clique em 'Testar API' primeiro."
+        return " ".join(parts)
+
+    # 22) último recurso: se há uma resposta real, tenta achar algo que bata -------------------
+    if isinstance(body, dict) and body:
+        return HeuristicAIProvider().answer_question(message, {"body_json": body, "json_valid": True})
+
+    return (
+        "Não reconheci essa pergunta com o provider heurístico atual (determinístico, sem LLM real). Tente "
+        "reformular usando termos como 'explique', 'campos', 'regras', 'cenários', 'massa', 'status' ou "
+        "'autenticação' — ou configure API_TESTFLOW_AI_PROVIDER=openai para uma conversa livre de verdade."
+    )
+
+
+def _sample_value_for_variable(name: str, index: int) -> Any:
+    """Gera UM valor plausível para uma variável de massa, pelo NOME dela -
+    puramente heurístico/genérico (não é um dicionário de dados de nenhum
+    cliente): so reconhece padrões comuns de nome de campo, do mesmo jeito
+    que _SYNONYMS já faz para regras em português."""
+    norm = _strip_accents(name.strip().lower())
+
+    if re.search(r"\bid$|_id$|^id\b", norm):
+        return index + 1
+    if "cpf" in norm:
+        return f"{10000000000 + index * 111111111 % 89999999999}"
+    if "idade" in norm or norm == "age":
+        return [0, 17, 18, 30, 65][index % 5]
+    if "email" in norm or "mail" in norm:
+        return f"teste{index + 1}@exemplo.com"
+    if re.search(r"valor|preco|price|amount", norm):
+        return (index + 1) * 1000
+    if re.search(r"nome|name", norm):
+        return f"Usuário Teste {index + 1}"
+    if re.search(r"ativo|active|habilitado|enabled", norm):
+        return index % 2 == 0
+    if re.search(r"telefone|phone", norm):
+        return f"119{80000000 + index}"
+    if re.search(r"resultado|status|situacao|estado", norm):
+        return "aprovado" if index % 2 == 0 else "recusado"
+    return f"valor_teste_{index + 1}"
+
+
+def _build_test_data(variables: list[str], count: int) -> dict:
+    count = max(1, min(count, 200))  # limite defensivo - a IA nunca gera uma massa gigante sem o usuario pedir
+    rows = [{var: _sample_value_for_variable(var, i) for var in variables} for i in range(count)]
+    return {"columns": list(variables), "rows": rows}

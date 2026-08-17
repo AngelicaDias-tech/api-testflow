@@ -16,10 +16,9 @@ import type { Rule, Scenario } from '../../../core/models'
   imports: [FormsModule],
   template: `
     <div class="pt-4">
-      <h3 class="text-base font-semibold text-foreground">2. Sugerir cenários</h3>
+      <h3 class="text-base font-semibold text-foreground">Sugerir cenários</h3>
       <p class="mb-2 text-sm text-foreground-muted">
-        Escolha uma regra já aprovada — a IA sugere valores de exemplo com o resultado esperado (PASS/FAIL). Só
-        informativo: a IA nunca executa nada, o pytest é quem decide de verdade.
+        Escolha uma regra já aprovada — a IA sugere valores de exemplo com o resultado esperado (PASS/FAIL).
       </p>
 
       @if (candidateRules().length === 0) {
